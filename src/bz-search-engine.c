@@ -570,7 +570,11 @@ query_sub_task_fiber (QuerySubTaskData *data)
             continue;
 
           if (g_hash_table_contains (bias->boost, id))
-            score *= 4.0;
+            {
+              if (score < threshold)
+                score = threshold;
+              score *= 4.0;
+            }
         }
 
       if (score > threshold)
