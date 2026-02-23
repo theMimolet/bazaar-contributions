@@ -215,6 +215,7 @@ gobject_specs = files(
   'bz-curated-row.txt',
   'bz-curated-section.txt',
   'bz-data-point.txt',
+  'bz-finished-search-query.txt',
   'bz-flathub-auth-provider.txt',
   'bz-flathub-sub-category.txt',
   'bz-hash-table-object.txt',

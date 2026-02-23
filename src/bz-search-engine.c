@@ -21,6 +21,7 @@
 #include "bz-search-engine.h"
 #include "bz-entry-group.h"
 #include "bz-env.h"
+#include "bz-finished-search-query.h"
 #include "bz-search-result.h"
 #include "bz-util.h"
 
@@ -345,12 +346,13 @@ bz_search_engine_query (BzSearchEngine    *self,
       n_groups == 0 ||
       **terms == '\0')
     {
-      g_autoptr (GPtrArray) ret = NULL;
+      g_autoptr (GPtrArray) results              = NULL;
+      g_autoptr (BzFinishedSearchQuery) finished = NULL;
 
-      ret = g_ptr_array_new_with_free_func (g_object_unref);
-      g_ptr_array_set_size (ret, n_groups);
+      results = g_ptr_array_new_with_free_func (g_object_unref);
+      g_ptr_array_set_size (results, n_groups);
 
-      for (guint i = 0; i < ret->len; i++)
+      for (guint i = 0; i < results->len; i++)
         {
           g_autoptr (BzEntryGroup) group    = NULL;
           g_autoptr (BzSearchResult) result = NULL;
@@ -360,12 +362,15 @@ bz_search_engine_query (BzSearchEngine    *self,
           result = bz_search_result_new ();
           bz_search_result_set_group (result, group);
           bz_search_result_set_original_index (result, i);
-          g_ptr_array_index (ret, i) = g_steal_pointer (&result);
+          g_ptr_array_index (results, i) = g_steal_pointer (&result);
         }
 
-      return dex_future_new_take_boxed (
-          G_TYPE_PTR_ARRAY,
-          g_steal_pointer (&ret));
+      finished = bz_finished_search_query_new ();
+      bz_finished_search_query_set_interpreted_query (finished, "");
+      bz_finished_search_query_set_results (finished, results);
+      bz_finished_search_query_set_n_results (finished, n_groups);
+
+      return dex_future_new_for_object (finished);
     }
   else
     {
@@ -394,18 +399,19 @@ bz_search_engine_query (BzSearchEngine    *self,
 static DexFuture *
 query_task_fiber (QueryTaskData *data)
 {
-  char     **terms                    = data->terms;
-  GPtrArray *shallow_mirror           = data->snapshot;
-  GPtrArray *biases                   = data->biases;
-  g_autoptr (GError) local_error      = NULL;
-  gboolean         result             = FALSE;
-  g_autofree char *query_utf8         = NULL;
-  guint            n_sub_tasks        = 0;
-  guint            scores_per_task    = 0;
-  g_autoptr (GPtrArray) active_biases = NULL;
-  g_autoptr (GPtrArray) sub_futures   = NULL;
-  g_autoptr (GArray) scores           = NULL;
-  g_autoptr (GPtrArray) results       = NULL;
+  char     **terms                           = data->terms;
+  GPtrArray *shallow_mirror                  = data->snapshot;
+  GPtrArray *biases                          = data->biases;
+  g_autoptr (GError) local_error             = NULL;
+  gboolean         result                    = FALSE;
+  g_autofree char *query_utf8                = NULL;
+  guint            n_sub_tasks               = 0;
+  guint            scores_per_task           = 0;
+  g_autoptr (GPtrArray) active_biases        = NULL;
+  g_autoptr (GPtrArray) sub_futures          = NULL;
+  g_autoptr (GArray) scores                  = NULL;
+  g_autoptr (GPtrArray) results              = NULL;
+  g_autoptr (BzFinishedSearchQuery) finished = NULL;
 
   query_utf8      = g_strjoinv (" ", terms);
   n_sub_tasks     = MAX (1, MIN (shallow_mirror->len / 512, g_get_num_processors ()));
@@ -508,9 +514,12 @@ query_task_fiber (QueryTaskData *data)
       g_ptr_array_index (results, i) = g_steal_pointer (&search_result);
     }
 
-  return dex_future_new_take_boxed (
-      G_TYPE_PTR_ARRAY,
-      g_steal_pointer (&results));
+  finished = bz_finished_search_query_new ();
+  bz_finished_search_query_set_interpreted_query (finished, query_utf8);
+  bz_finished_search_query_set_results (finished, results);
+  bz_finished_search_query_set_n_results (finished, results->len);
+
+  return dex_future_new_for_object (finished);
 }
 
 static DexFuture *
@@ -544,7 +553,7 @@ query_sub_task_fiber (QuerySubTaskData *data)
       title = bz_entry_group_get_title (group);
       if ((id != NULL && g_strcmp0 (query_utf8, id) == 0) ||
           (title != NULL && strcasecmp (query_utf8, title) == 0))
-        score = G_MAXDOUBLE;
+        score = (double) G_MAXUINT;
       else
         {
           const char *developer     = NULL;
