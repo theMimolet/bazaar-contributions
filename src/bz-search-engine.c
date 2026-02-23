@@ -31,7 +31,7 @@ struct _BzSearchEngine
   BzInternalConfig *internal_config;
   GListModel       *model;
 
-  GPtrArray *bias_regexes;
+  GPtrArray *biases;
 };
 
 G_DEFINE_FINAL_TYPE (BzSearchEngine, bz_search_engine, G_TYPE_OBJECT);
@@ -128,7 +128,7 @@ bz_search_engine_dispose (GObject *object)
   g_clear_object (&self->internal_config);
   g_clear_object (&self->model);
 
-  g_clear_pointer (&self->bias_regexes, g_ptr_array_unref);
+  g_clear_pointer (&self->biases, g_ptr_array_unref);
 
   G_OBJECT_CLASS (bz_search_engine_parent_class)->dispose (object);
 }
@@ -204,7 +204,7 @@ bz_search_engine_class_init (BzSearchEngineClass *klass)
 static void
 bz_search_engine_init (BzSearchEngine *self)
 {
-  self->bias_regexes = g_ptr_array_new_with_free_func (bias_data_unref);
+  self->biases = g_ptr_array_new_with_free_func (bias_data_unref);
 }
 
 BzSearchEngine *
@@ -228,7 +228,7 @@ bz_search_engine_set_internal_config (BzSearchEngine   *self,
   g_return_if_fail (internal_config == NULL || BZ_IS_INTERNAL_CONFIG (internal_config));
 
   g_clear_object (&self->internal_config);
-  g_ptr_array_set_size (self->bias_regexes, 0);
+  g_ptr_array_set_size (self->biases, 0);
 
   if (internal_config != NULL)
     {
@@ -243,15 +243,14 @@ bz_search_engine_set_internal_config (BzSearchEngine   *self,
 
       for (guint i = 0; i < n_biases; i++)
         {
-          g_autoptr (GError) local_error  = NULL;
-          g_autoptr (BzSearchBias) bias   = NULL;
-          const char      *regex_string   = NULL;
-          const char      *convert_to     = NULL;
-          GListModel      *boost_appids   = NULL;
-          g_autofree char *bounded_string = NULL;
-          g_autoptr (GRegex) regex        = NULL;
-          g_autoptr (GHashTable) boost    = NULL;
-          g_autoptr (BiasData) data       = NULL;
+          g_autoptr (GError) local_error = NULL;
+          g_autoptr (BzSearchBias) bias  = NULL;
+          const char *regex_string       = NULL;
+          const char *convert_to         = NULL;
+          GListModel *boost_appids       = NULL;
+          g_autoptr (GRegex) regex       = NULL;
+          g_autoptr (GHashTable) boost   = NULL;
+          g_autoptr (BiasData) data      = NULL;
 
           bias         = g_list_model_get_item (biases, i);
           regex_string = bz_search_bias_get_regex (bias);
@@ -265,16 +264,15 @@ bz_search_engine_set_internal_config (BzSearchEngine   *self,
               continue;
             }
 
-          bounded_string = g_strdup_printf ("^(%s)$", regex_string);
-          regex          = g_regex_new (
-              bounded_string,
+          regex = g_regex_new (
+              regex_string,
               G_REGEX_OPTIMIZE,
               G_REGEX_MATCH_DEFAULT,
               &local_error);
           if (regex == NULL)
             {
               g_critical ("Internal regex \"%s\" is invalid: %s",
-                          bounded_string, local_error->message);
+                          regex_string, local_error->message);
               continue;
             }
 
@@ -303,7 +301,7 @@ bz_search_engine_set_internal_config (BzSearchEngine   *self,
           data->regex      = g_regex_ref (regex);
           data->convert_to = bz_maybe_strdup (convert_to);
           data->boost      = bz_maybe_ref (boost, g_hash_table_ref);
-          g_ptr_array_add (self->bias_regexes, bias_data_ref (data));
+          g_ptr_array_add (self->biases, bias_data_ref (data));
         }
     }
 
@@ -383,7 +381,7 @@ bz_search_engine_query (BzSearchEngine    *self,
       data           = query_task_data_new ();
       data->terms    = g_strdupv ((gchar **) terms);
       data->snapshot = g_steal_pointer (&snapshot);
-      data->biases   = g_ptr_array_ref (self->bias_regexes);
+      data->biases   = g_ptr_array_ref (self->biases);
 
       return dex_scheduler_spawn (
           dex_thread_pool_scheduler_get_default (),
@@ -400,39 +398,48 @@ query_task_fiber (QueryTaskData *data)
   GPtrArray *shallow_mirror           = data->snapshot;
   GPtrArray *biases                   = data->biases;
   g_autoptr (GError) local_error      = NULL;
-  gboolean result                     = FALSE;
-  g_autoptr (GPtrArray) active_biases = NULL;
+  gboolean         result             = FALSE;
   g_autofree char *query_utf8         = NULL;
   guint            n_sub_tasks        = 0;
   guint            scores_per_task    = 0;
+  g_autoptr (GPtrArray) active_biases = NULL;
   g_autoptr (GPtrArray) sub_futures   = NULL;
   g_autoptr (GArray) scores           = NULL;
   g_autoptr (GPtrArray) results       = NULL;
 
-  active_biases = g_ptr_array_new_with_free_func (bias_data_unref);
-  if (biases->len > 0)
-    {
-      for (guint i = 0; terms[i] != NULL; i++)
-        {
-          for (guint j = 0; j < biases->len; j++)
-            {
-              BiasData *bias = NULL;
-
-              bias = g_ptr_array_index (biases, j);
-              if (!g_regex_match (bias->regex, terms[i], G_REGEX_MATCH_DEFAULT, NULL))
-                continue;
-
-              g_ptr_array_add (active_biases, bias_data_ref (bias));
-
-              g_clear_pointer (&terms[i], g_free);
-              terms[i] = g_strdup (bias->convert_to);
-            }
-        }
-    }
-
   query_utf8      = g_strjoinv (" ", terms);
   n_sub_tasks     = MAX (1, MIN (shallow_mirror->len / 512, g_get_num_processors ()));
   scores_per_task = shallow_mirror->len / n_sub_tasks;
+
+  active_biases = g_ptr_array_new_with_free_func (bias_data_unref);
+  if (biases->len > 0)
+    {
+      for (guint j = 0; j < biases->len; j++)
+        {
+          BiasData *bias = NULL;
+
+          bias = g_ptr_array_index (biases, j);
+          if (!g_regex_match (bias->regex, query_utf8, G_REGEX_MATCH_DEFAULT, NULL))
+            continue;
+
+          if (bias->convert_to != NULL)
+            {
+              g_autofree char *tmp = NULL;
+
+              tmp = g_regex_replace (
+                  bias->regex, query_utf8,
+                  -1, 0, bias->convert_to,
+                  G_REGEX_MATCH_DEFAULT, NULL);
+              if (tmp != NULL)
+                {
+                  g_clear_pointer (&query_utf8, g_free);
+                  query_utf8 = g_steal_pointer (&tmp);
+                }
+            }
+
+          g_ptr_array_add (active_biases, bias_data_ref (bias));
+        }
+    }
 
   sub_futures = g_ptr_array_new_with_free_func (dex_unref);
   for (guint i = 0; i < n_sub_tasks; i++)

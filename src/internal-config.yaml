@@ -1,6 +1,11 @@
 search-biases:
-  # `(?i)` means case insensitive
-  - regex: (?i)browser
+  # Brief regex review:
+  #   `^` indicates the beginning of the string
+  #   `$` indicates the end of the string
+  #   `\b` indicates a word boundary
+  #   `(?i)` means case insensitive
+
+  - regex: ^(?i)browser$
     convert-to: web browser
     boost-appids:
       - app.zen_browser.zen
@@ -11,13 +16,13 @@ search-biases:
       - org.mozilla.firefox
       - org.torproject.torbrowser-launcher
 
-  - regex: (?i)vm
+  - regex: \b(?i)vm\b
     convert-to: virtual machine
     boost-appids:
       - org.virt_manager.virt-manager
       - org.gnome.Boxes
 
-  - regex: (?i)ide
+  - regex: \b(?i)ide\b
     convert-to: develop
     boost-appids:
       - com.visualstudio.code
@@ -26,5 +31,5 @@ search-biases:
       - org.gnome.Builder
       - org.kde.kdevelop
 
-  - regex: (?i)yt
+  - regex: \b(?i)yt\b
     convert-to: youtube
