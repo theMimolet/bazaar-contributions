@@ -37,5 +37,13 @@ search-biases:
       - fm.reaper.Reaper
       - io.lmms.LMMS
 
+  - regex: \b(?i)photoshop\b
+    boost-appids:
+      - org.gimp.GIMP
+
+  - regex: \b(?i)illustrator\b
+    boost-appids:
+      - org.inkscape.Inkscape
+
   - regex: \b(?i)yt\b
     convert-to: youtube
