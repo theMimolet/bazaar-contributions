@@ -682,7 +682,7 @@ query_sub_task_fiber (QuerySubTaskData *data)
               score = bias->linear_boost.slope * score + bias->linear_boost.y_intercept;
               break;
             case EXPONENTIAL:
-              score = pow (bias->exponential_boost.factor, score) + bias->exponential_boost.y_intercept;
+              score = pow (bias->exponential_boost.factor, score) * bias->exponential_boost.y_intercept;
               break;
             default:
               break;
