@@ -462,7 +462,7 @@ print_set_property_methods () {
         printf '%s ' "$LOC_CTYPE"
         case "$LOC_PTYPE" in
             char|uchar|boolean|int|uint|long|ulong|int64|uint64|unichar|enum|flags|float|double) ;;
-            *) printf '*'
+            *) printf '*' ;;
         esac
         printf '%s)' "$LOC_NAME"
 
