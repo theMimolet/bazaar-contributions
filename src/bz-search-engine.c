@@ -371,12 +371,36 @@ biases_changed (BzSearchEngine *self,
                 guint           added,
                 GListModel     *model)
 {
-  if (removed > 0)
-    g_ptr_array_remove_range (self->biases_mirror, position, removed);
+  g_autoptr (GPtrArray) new_mirror = NULL;
+
+  /* Since `self->biases_mirror` is used in other threads, it should be
+     immutable after its construction; so we have to make a new mirror upon
+     every change */
+  new_mirror = g_ptr_array_new_with_free_func (bias_data_unref);
+  g_ptr_array_set_size (new_mirror, self->biases_mirror->len + added - removed);
+
+#define COPY_OVER(_old_idx, _new_idx, _len)                                   \
+  for (guint _i = 0; _i < (_len); _i++)                                       \
+    {                                                                         \
+      BiasData  *_data = NULL;                                                \
+      BiasData **_loc  = NULL;                                                \
+                                                                              \
+      _data = g_ptr_array_index (self->biases_mirror, (_old_idx) + _i);       \
+      _loc  = (BiasData **) &g_ptr_array_index (new_mirror, (_new_idx) + _i); \
+      *_loc = bias_data_ref (_data);                                          \
+    }
+
+  COPY_OVER (0, 0, position);
+  COPY_OVER (position + removed,
+             position + added,
+             self->biases_mirror->len - (position + removed));
+
+#undef COPY_OVER
 
   for (guint i = 0; i < added; i++)
     {
       g_autoptr (GError) local_error              = NULL;
+      BiasData **loc                              = NULL;
       g_autoptr (BzSearchBias) bias               = NULL;
       const char            *regex_string         = NULL;
       const char            *convert_to           = NULL;
@@ -387,6 +411,8 @@ biases_changed (BzSearchEngine *self,
       g_autoptr (GHashTable) boost                = NULL;
       g_autoptr (BiasData) data                   = NULL;
 
+      loc = (BiasData **) &g_ptr_array_index (new_mirror, position + i);
+
       bias                 = g_list_model_get_item (model, position + i);
       regex_string         = bz_search_bias_get_regex (bias);
       convert_to           = bz_search_bias_get_convert_to (bias);
@@ -394,15 +420,15 @@ biases_changed (BzSearchEngine *self,
       linear_function      = bz_search_bias_get_linear_boost (bias);
       exponential_function = bz_search_bias_get_exponential_boost (bias);
 
-#define SKIP()                                                                     \
-  G_STMT_START                                                                     \
-  {                                                                                \
-    g_autoptr (BiasData) _data = NULL;                                             \
-                                                                                   \
-    _data          = bias_data_new ();                                             \
-    _data->invalid = TRUE;                                                         \
-    g_ptr_array_insert (self->biases_mirror, position + i, bias_data_ref (_data)); \
-  }                                                                                \
+#define SKIP()                              \
+  G_STMT_START                              \
+  {                                         \
+    g_autoptr (BiasData) _data = NULL;      \
+                                            \
+    _data          = bias_data_new ();      \
+    _data->invalid = TRUE;                  \
+    *loc           = bias_data_ref (_data); \
+  }                                         \
   G_STMT_END
 
       if (regex_string == NULL ||
@@ -477,8 +503,11 @@ biases_changed (BzSearchEngine *self,
           data->exponential_boost.y_intercept = bz_exponential_function_get_y_intercept (exponential_function);
         }
 
-      g_ptr_array_insert (self->biases_mirror, position + i, bias_data_ref (data));
+      *loc = bias_data_ref (data);
     }
+
+  g_clear_pointer (&self->biases_mirror, g_ptr_array_unref);
+  self->biases_mirror = g_steal_pointer (&new_mirror);
 }
 
 static DexFuture *
