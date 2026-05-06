@@ -901,7 +901,8 @@ ensure_flathub_fiber (EnsureFlathubData *data)
     {
       remote = flatpak_installation_get_remote_by_name (
           self->system, "flathub", cancellable, NULL);
-      installation = self->system;
+      if (remote != NULL)
+        installation = self->system;
     }
 #endif
 
