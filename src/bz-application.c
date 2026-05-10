@@ -1115,7 +1115,7 @@ init_fiber (GWeakRef *wr)
           g_str_hash, g_str_equal, g_free, g_free);
     }
 
-  repos = dex_await_object (
+    repos = dex_await_object (
       bz_backend_list_repositories (BZ_BACKEND (self->flatpak), NULL),
       &local_error);
 
@@ -1169,8 +1169,10 @@ init_fiber (GWeakRef *wr)
                   bz_flathub_state_set_map_factory (self->flathub, self->application_factory);
                   bz_state_info_set_flathub (self->state, self->flathub);
 
-                  if (cache_has_flathub)
+                  if (cache_has_flathub){
+                    dex_promise_resolve_boolean (self->ready_to_open_files, TRUE);
                     bz_state_info_set_busy (self->state, FALSE);
+                  }
                 }
               else
                 {
@@ -1286,10 +1288,6 @@ enumerate_disk_entries_fiber (GWeakRef *wr)
 
   gtk_filter_changed (GTK_FILTER (self->group_filter), GTK_FILTER_CHANGE_LESS_STRICT);
   gtk_filter_changed (GTK_FILTER (self->appid_filter), GTK_FILTER_CHANGE_LESS_STRICT);
-
-  bz_state_info_set_background_task_label (self->state, _ ("Checking for updates…"));
-  fiber_check_for_updates (self);
-  finish_with_background_task_label (self);
 
   return dex_future_new_for_boolean (has_flathub_entry);
 }
@@ -1774,7 +1772,6 @@ respond_to_flatpak_fiber (RespondToFlatpakData *data)
             self->state, _ ("Loading %d apps…"), self->n_entries_incoming);
       else
         {
-          bz_state_info_set_background_task_label (self->state, _ ("Checking for updates…"));
           fiber_check_for_updates (self);
           finish_with_background_task_label (self);
         }
@@ -2296,6 +2293,7 @@ fiber_check_for_updates (BzApplication *self)
   GtkWindow *window                = NULL;
 
   g_debug ("Checking for updates...");
+  bz_state_info_set_background_task_label (self->state, _ ("Checking for updates…"));
   bz_state_info_set_checking_for_updates (self->state, TRUE);
 
   update_ids = dex_await_boxed (
