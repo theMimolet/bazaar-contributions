@@ -23,6 +23,7 @@
 #include <gtksourceview/gtksource.h>
 #include <md4c.h>
 
+#include "bge-marshalers.h"
 #include "bge.h"
 
 struct _BgeMarkdownRender
@@ -50,20 +51,29 @@ enum
 };
 static GParamSpec *props[LAST_PROP] = { 0 };
 
+enum
+{
+  SIGNAL_BIND_INLINE_URI,
+
+  LAST_SIGNAL,
+};
+static guint signals[LAST_SIGNAL];
+
 static void
 regenerate (BgeMarkdownRender *self);
 
 typedef struct
 {
-  GtkBox    *box;
-  GPtrArray *box_children;
-  char      *beginning;
-  GString   *markup;
-  GArray    *block_stack;
-  int        indent;
-  int        list_index;
-  MD_CHAR    list_prefix;
-  GPtrArray *source_views;
+  BgeMarkdownRender *self;
+  GtkBox            *box;
+  GPtrArray         *box_children;
+  char              *beginning;
+  GString           *markup;
+  GArray            *block_stack;
+  int                indent;
+  int                list_index;
+  MD_CHAR            list_prefix;
+  GPtrArray         *source_views;
 } ParseCtx;
 
 static int
@@ -230,6 +240,23 @@ bge_markdown_render_class_init (BgeMarkdownRenderClass *klass)
 
   g_object_class_install_properties (object_class, LAST_PROP, props);
 
+  signals[SIGNAL_BIND_INLINE_URI] =
+      g_signal_new (
+          "bind-inline-uri",
+          G_OBJECT_CLASS_TYPE (klass),
+          G_SIGNAL_RUN_FIRST,
+          0,
+          NULL, NULL,
+          bge_marshal_OBJECT__STRING_STRING,
+          GTK_TYPE_WIDGET,
+          2,
+          G_TYPE_STRING,
+          G_TYPE_STRING);
+  g_signal_set_va_marshaller (
+      signals[SIGNAL_BIND_INLINE_URI],
+      G_TYPE_FROM_CLASS (klass),
+      bge_marshal_OBJECT__STRING_STRINGv);
+
   widget_class->get_request_mode = bge_markdown_render_get_request_mode;
   widget_class->measure          = bge_markdown_render_measure;
   widget_class->size_allocate    = bge_markdown_render_size_allocate;
@@ -315,6 +342,7 @@ regenerate (BgeMarkdownRender *self)
   if (self->markdown == NULL)
     return;
 
+  ctx.self         = self;
   ctx.box          = GTK_BOX (self->box);
   ctx.box_children = self->box_children;
   ctx.beginning    = self->markdown;
@@ -429,7 +457,6 @@ enter_span (MD_SPANTYPE type,
       }
       break;
     case MD_SPAN_IMG:
-      g_warning ("Images aren't implemented yet!");
       break;
     case MD_SPAN_CODE:
       g_string_append (ctx->markup, "<tt>");
@@ -473,7 +500,25 @@ leave_span (MD_SPANTYPE type,
       g_string_append (ctx->markup, "</a>");
       break;
     case MD_SPAN_IMG:
-      // g_warning ("Images aren't implemented yet!");
+      {
+        MD_SPAN_IMG_DETAIL *img_detail = detail;
+        g_autofree char    *title      = NULL;
+        g_autofree char    *src        = NULL;
+        GtkWidget          *widget     = NULL;
+
+        if (img_detail->title.text != NULL)
+          title = g_strndup (img_detail->title.text, img_detail->title.size);
+        if (img_detail->src.text != NULL)
+          src = g_strndup (img_detail->src.text, img_detail->src.size);
+
+        g_signal_emit (ctx->self, signals[SIGNAL_BIND_INLINE_URI], 0, title, src, &widget);
+        if (widget != NULL)
+          {
+            gtk_widget_set_margin_start (widget, 10 * ctx->indent);
+            gtk_box_append (ctx->box, widget);
+            g_ptr_array_add (ctx->box_children, widget);
+          }
+      }
       break;
     case MD_SPAN_CODE:
       g_string_append (ctx->markup, "</tt>");
