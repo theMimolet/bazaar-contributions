@@ -20,6 +20,7 @@
 
 #define G_LOG_DOMAIN "BGE::MARKDOWN-RENDER"
 
+#include <gtksourceview/gtksource.h>
 #include <md4c.h>
 
 #include "bge.h"
@@ -487,10 +488,12 @@ text (MD_TEXTTYPE    type,
       MD_SIZE        size,
       void          *user_data)
 {
-  ParseCtx        *ctx     = user_data;
-  g_autofree char *escaped = NULL;
+  ParseCtx *ctx   = user_data;
+  int       block = -1;
 
   g_assert (ctx->markup != NULL);
+  if (ctx->block_stack->len > 0)
+    block = g_array_index (ctx->block_stack, int, ctx->block_stack->len - 1);
 
   if (type == MD_TEXT_SOFTBR &&
       ctx->markup->len > 0)
@@ -498,8 +501,12 @@ text (MD_TEXTTYPE    type,
   else if (type == MD_TEXT_BR &&
            ctx->markup->len > 0)
     g_string_append_c (ctx->markup, '\n');
+  else if (block == MD_BLOCK_CODE)
+    g_string_append_len (ctx->markup, buf, size);
   else
     {
+      g_autofree char *escaped = NULL;
+
       escaped = g_markup_escape_text (buf, size);
       g_string_append (ctx->markup, escaped);
     }
@@ -668,18 +675,39 @@ terminate_block (MD_BLOCKTYPE type,
 
     case MD_BLOCK_CODE:
       {
-        GtkWidget *label = NULL;
+        MD_BLOCK_CODE_DETAIL *code_detail  = detail;
+        g_autofree char      *lang_id      = NULL;
+        GtkSourceLanguage    *language     = NULL;
+        g_autoptr (GtkSourceBuffer) buffer = NULL;
+        GtkWidget *view                    = NULL;
+        GtkWidget *window                  = NULL;
 
-        label = gtk_label_new (ctx->markup->str);
-        SET_DEFAULTS (label);
-        gtk_widget_add_css_class (label, "monospace");
-        gtk_widget_set_margin_start (label, 5);
-        gtk_widget_set_margin_end (label, 5);
-        gtk_widget_set_margin_top (label, 5);
-        gtk_widget_set_margin_bottom (label, 5);
+        if (code_detail->lang.text != NULL)
+          {
+            lang_id  = g_strndup (code_detail->lang.text, code_detail->lang.size);
+            language = gtk_source_language_manager_get_language (
+                gtk_source_language_manager_get_default (), lang_id);
+          }
 
-        child = gtk_frame_new (NULL);
-        gtk_frame_set_child (GTK_FRAME (child), label);
+        if (language != NULL)
+          buffer = gtk_source_buffer_new_with_language (language);
+        else
+          buffer = gtk_source_buffer_new (NULL);
+        gtk_text_buffer_set_text (
+            GTK_TEXT_BUFFER (buffer),
+            ctx->markup->str, ctx->markup->len);
+
+        view = gtk_source_view_new_with_buffer (buffer);
+        gtk_text_view_set_editable (GTK_TEXT_VIEW (view), FALSE);
+        gtk_text_view_set_monospace (GTK_TEXT_VIEW (view), TRUE);
+        gtk_widget_add_css_class (view, "monospace");
+
+        window = gtk_scrolled_window_new ();
+        gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (window), GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+        gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (window), view);
+
+        child = gtk_frame_new (lang_id);
+        gtk_frame_set_child (GTK_FRAME (child), window);
       }
       break;
 
