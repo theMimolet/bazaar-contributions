@@ -316,6 +316,9 @@ markdown_bind_inline_uri (BzSectionView     *self,
           picture = gtk_picture_new ();
           gtk_picture_set_paintable (GTK_PICTURE (picture), GDK_PAINTABLE (texture));
 
+          gtk_widget_set_hexpand (picture, TRUE);
+          gtk_widget_set_size_request (picture, -1, 100);
+
           return picture;
         }
     }
